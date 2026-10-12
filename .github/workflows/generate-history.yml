@@ -1,0 +1,46 @@
+name: Generate Sprint History
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Generate sprint history for Ban 62-79
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/generate_history.py
+
+      - name: Commit and push history
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          if git diff --quiet; then
+            echo "No changes to commit"
+          else
+            git add data/sprint_history.json
+            git commit -m "Generate velocity history for Sprint Ban 62-79"
+            git push
+          fi
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sprint-history-${{ github.run_number }}
+          path: data/sprint_history.json
