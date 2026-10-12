@@ -46,6 +46,7 @@ def gh_graphql(query: str, variables: dict):
 
 
 def fetch_sprint_iterations(org: str, project_number: int):
+    """Fetch all Sprint Ban iterations from Project v2"""
     query = """
     query($org: String!, $projectNumber: Int!) {
       organization(login: $org) {
@@ -83,13 +84,15 @@ def fetch_sprint_iterations(org: str, project_number: int):
     return iterations
 
 
-def fetch_project_items_for_iteration(org: str, project_number: int, iteration_id: str):
+def fetch_project_items_by_iteration(org: str, project_number: int, iteration_id: str):
+    """Fetch all project items filtered by Sprint Ban iteration"""
     query = """
-    query($org: String!, $projectNumber: Int!, $iterationId: String!) {
+    query($org: String!, $projectNumber: Int!) {
       organization(login: $org) {
         projectV2(number: $projectNumber) {
-          items(first: 200) {
+          items(first: 100) {
             nodes {
+              id
               content {
                 __typename
                 ... on Issue {
@@ -111,10 +114,7 @@ def fetch_project_items_for_iteration(org: str, project_number: int, iteration_i
                         name
                       }
                     }
-                    iteration {
-                      id
-                      title
-                    }
+                    iterationId
                   }
                 }
               }
@@ -124,19 +124,30 @@ def fetch_project_items_for_iteration(org: str, project_number: int, iteration_i
       }
     }
     """
-    data = gh_graphql(query, {"org": org, "projectNumber": project_number, "iterationId": iteration_id})
-    return data["organization"]["projectV2"]["items"]["nodes"]
+    data = gh_graphql(query, {"org": org, "projectNumber": project_number})
+    
+    # Filter items by iteration_id
+    items = data["organization"]["projectV2"]["items"]["nodes"]
+    filtered = []
+    for item in items:
+        for field_value in item.get("fieldValues", {}).get("nodes", []):
+            if field_value.get("iterationId") == iteration_id:
+                filtered.append(item)
+                break
+    return filtered
 
 
 def extract_labels(content):
+    """Extract labels from issue content"""
     labels = []
-    if content.get("labels"):
+    if content and content.get("labels"):
         for label in content["labels"].get("nodes", []):
             labels.append(label["name"].lower())
     return labels
 
 
 def compute_points(labels):
+    """Sum points from Fibonacci labels"""
     total = 0
     for label in labels:
         if label in POINTS_MAP:
@@ -145,6 +156,7 @@ def compute_points(labels):
 
 
 def load_history(path: Path):
+    """Load sprint history from JSON file"""
     if not path.exists():
         return []
     try:
@@ -156,6 +168,7 @@ def load_history(path: Path):
 
 
 def save_history(path: Path, history):
+    """Save sprint history to JSON file"""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as fh:
         json.dump(history, fh, indent=2, ensure_ascii=False)
@@ -163,6 +176,7 @@ def save_history(path: Path, history):
 
 
 def moving_average(history, window=3):
+    """Calculate moving average over last N sprints"""
     if not history:
         return 0
     recent = history[-window:] if len(history) >= window else history
@@ -170,7 +184,9 @@ def moving_average(history, window=3):
 
 
 def create_report_issue(org: str, repo: str, sprint_name: str, velocity: int, tickets_count: int, moving_avg: float, history):
+    """Create a GitHub issue with velocity report"""
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    
     history_table = "| Sprint | Date | Points | Tickets | Moyenne 3 |\n| --- | --- | ---: | ---: | ---: |\n"
     for entry in history[-5:]:
         date = entry.get("date", "")[:10]
@@ -212,7 +228,8 @@ def create_report_issue(org: str, repo: str, sprint_name: str, velocity: int, ti
         with request.urlopen(req) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         return data.get("number")
-    except error.HTTPError:
+    except error.HTTPError as exc:
+        print(f"Warning: Could not create issue: {exc}")
         return None
 
 
@@ -224,23 +241,33 @@ def main():
     create_issue = os.environ.get("CREATE_ISSUE", "true").lower() == "true"
     target_repo = os.environ.get("TARGET_REPO", "gestion_projet_ban").strip()
 
+    print(f"Org: {org}, Project: {project_number}")
+    
+    # Fetch all iterations
     iterations = fetch_sprint_iterations(org, project_number)
     if not iterations:
         raise RuntimeError("No Sprint Ban iterations found in project")
+    
+    print(f"Found {len(iterations)} Sprint Ban iterations")
 
+    # Select iteration
     if sprint_name:
         matching = [it for it in iterations if sprint_name.lower() in it["title"].lower()]
         if not matching:
             raise RuntimeError(f"No iteration found matching '{sprint_name}'")
         iteration = matching[0]
     else:
-        # select the most recently created iteration
+        # Get the most recent iteration
         iteration = sorted(iterations, key=lambda x: x.get("start_date") or "", reverse=True)[0]
 
     sprint_title = iteration["title"]
+    iteration_id = iteration["id"]
     print(f"Processing sprint: {sprint_title}")
 
-    items = fetch_project_items_for_iteration(org, project_number, iteration["id"])
+    # Fetch items for this iteration
+    items = fetch_project_items_by_iteration(org, project_number, iteration_id)
+    print(f"Found {len(items)} items in this sprint")
+
     velocity = 0
     closed_issues = []
 
@@ -250,10 +277,13 @@ def main():
             continue
         if not content.get("closed"):
             continue
+        
         labels = extract_labels(content)
         points = compute_points(labels)
+        
         if points <= 0:
             continue
+        
         velocity += points
         closed_issues.append({
             "number": content["number"],
@@ -261,6 +291,9 @@ def main():
             "points": points,
         })
 
+    print(f"Velocity: {velocity} points from {len(closed_issues)} closed tickets")
+
+    # Update history
     history = load_history(history_path)
     record = {
         "sprint": sprint_title,
@@ -269,41 +302,44 @@ def main():
         "tickets_completed": len(closed_issues),
     }
 
+    # Replace if exists, otherwise append
     replace_idx = next((i for i, entry in enumerate(history) if entry.get("sprint") == sprint_title), None)
     if replace_idx is not None:
         history[replace_idx] = record
     else:
         history.append(record)
 
+    # Calculate moving average for all entries
     for entry in history:
         entry["moving_average_3"] = moving_average(history, window=3)
 
+    # Sort by date
     history = sorted(history, key=lambda x: x.get("date", ""))
-    for entry in history:
-        if entry.get("sprint") == sprint_title:
-            entry["moving_average_3"] = moving_average(history, window=3)
-            break
-
+    
+    # Save history
     save_history(history_path, history)
-    print(f"Velocity = {velocity} points")
-    print(f"Closed tickets = {len(closed_issues)}")
-    print(f"Moving average = {moving_average(history, window=3)}")
+    print(f"History saved to {history_path}")
 
+    moving_avg = moving_average(history, window=3)
+    print(f"Moving average (3 sprints): {moving_avg}")
+
+    # Create report issue if requested
     issue_number = None
     if create_issue:
-        issue_number = create_report_issue(org, target_repo, sprint_title, velocity, len(closed_issues), moving_average(history, window=3), history)
+        issue_number = create_report_issue(org, target_repo, sprint_title, velocity, len(closed_issues), moving_avg, history)
         if issue_number:
             print(f"Issue report created: #{issue_number}")
 
+    # Write GitHub Actions summary
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as fh:
-            fh.write(f"## Vélocité : {sprint_title}\n\n")
-            fh.write(f"- Points complétés : **{velocity}**\n")
-            fh.write(f"- Tickets fermés : **{len(closed_issues)}**\n")
-            fh.write(f"- Moyenne mobile 3 sprints : **{moving_average(history, window=3)}**\n")
+            fh.write(f"## ✅ Vélocité calculée : {sprint_title}\n\n")
+            fh.write(f"- **Points complétés :** {velocity}\n")
+            fh.write(f"- **Tickets fermés :** {len(closed_issues)}\n")
+            fh.write(f"- **Moyenne mobile (3 sprints) :** {moving_avg}\n")
             if issue_number:
-                fh.write(f"- Rapport issu : **#{issue_number}**\n")
+                fh.write(f"- **Rapport :** [#{issue_number}](../../issues/{issue_number})\n")
 
 
 if __name__ == "__main__":
