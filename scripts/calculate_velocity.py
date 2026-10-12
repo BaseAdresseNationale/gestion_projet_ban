@@ -83,9 +83,7 @@ def fetch_sprint_iterations(org: str, project_number: int):
                 })
     return iterations
 
-
 def fetch_all_project_items(org: str, project_number: int):
-    """Fetch ALL project items (no filtering in query)"""
     query = """
     query($org: String!, $projectNumber: Int!) {
       organization(login: $org) {
@@ -127,9 +125,7 @@ def fetch_all_project_items(org: str, project_number: int):
     data = gh_graphql(query, {"org": org, "projectNumber": project_number})
     return data["organization"]["projectV2"]["items"]["nodes"]
 
-
 def filter_items_by_iteration(items, iteration_id: str):
-    """Filter items by iteration ID in Python"""
     filtered = []
     for item in items:
         for field_value in item.get("fieldValues", {}).get("nodes", []):
@@ -137,7 +133,6 @@ def filter_items_by_iteration(items, iteration_id: str):
                 filtered.append(item)
                 break
     return filtered
-
 
 def extract_labels(content):
     """Extract labels from issue content"""
