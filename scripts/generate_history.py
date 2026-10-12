@@ -2,6 +2,7 @@
 """Generate velocity history for Sprint Ban 62 to 79 from Project v2"""
 import json
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib import error, request
@@ -170,6 +171,14 @@ def filter_items_by_iteration(items, iteration_id: str):
     return filtered
 
 
+def extract_sprint_number(title: str):
+    """Extract the sprint number from a title like 'Sprint Ban 62', 'Sprint Ban 62 (2026)', etc."""
+    match = re.search(r"Sprint Ban\s*(\d+)", title, re.IGNORECASE)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
 def calculate_velocity_for_iteration(items):
     """Calculate velocity for a specific iteration"""
     velocity = 0
@@ -206,36 +215,28 @@ def main():
     iterations = fetch_all_iterations(org, project_number)
     print(f"Found {len(iterations)} total iterations")
     
-    # Debug: print all iterations found
-    print("\nAll iterations found:")
+    print("\nAll iteration titles found:")
     for it in iterations:
         print(f"  - {it['title']}")
     
-    # Filter only Sprint Ban 62 to 79 (exclude 80)
     sprint_numbers = []
     for it in iterations:
         title = it["title"]
-        # Try to extract sprint number
-        # Format: "Sprint Ban X" or "Sprint Ban XX"
-        if "Sprint Ban" in title:
-            try:
-                # Remove "Sprint Ban " prefix and convert to int
-                num_str = title.replace("Sprint Ban", "").strip()
-                num = int(num_str)
-                if 62 <= num <= 79:
-                    sprint_numbers.append((num, it))
-                    print(f"  ✓ Sprint Ban {num} matches filter")
-            except ValueError:
-                print(f"  ✗ Could not parse number from '{title}'")
+        sprint_num = extract_sprint_number(title)
+        if sprint_num is not None:
+            if 62 <= sprint_num <= 79:
+                sprint_numbers.append((sprint_num, it))
+                print(f"  ✓ {title} -> sprint {sprint_num} matches filter")
+            else:
+                print(f"  - {title} -> sprint {sprint_num} outside filter")
+        else:
+            print(f"  ✗ {title} -> no sprint number matched")
     
     if not sprint_numbers:
-        print("\n⚠️  No sprints found matching 'Sprint Ban 62' to 'Sprint Ban 79'")
-        print("This might be due to:")
-        print("  - Different naming format (check iteration names above)")
-        print("  - Sprints not created yet in the Project v2")
+        print("\n⚠️ No sprint found between Sprint Ban 62 and Sprint Ban 79")
+        print("Check the exact iteration titles displayed above.")
         return
     
-    # Sort by sprint number
     sprint_numbers.sort(key=lambda x: x[0])
     filtered_iterations = [it for _, it in sprint_numbers]
     
@@ -245,13 +246,12 @@ def main():
     print(f"Fetched {len(all_items)} total items")
     
     history = []
-    for sprint_num, iteration in filtered_iterations:
-        print(f"\nProcessing Sprint Ban {sprint_num}...")
+    for sprint_num, iteration in sprint_numbers:
+        print(f"\nProcessing sprint {sprint_num} ({iteration['title']})...")
         items = filter_items_by_iteration(all_items, iteration["id"])
         print(f"  Found {len(items)} items in this sprint")
         
         velocity, tickets_count = calculate_velocity_for_iteration(items)
-        
         record = {
             "sprint": iteration["title"],
             "date": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -259,17 +259,14 @@ def main():
             "tickets_completed": tickets_count,
         }
         history.append(record)
-        
         print(f"  Velocity: {velocity} points ({tickets_count} tickets)")
     
-    # Calculate moving average for all entries
     for i, entry in enumerate(history):
         if i < 2:
             entry["moving_average_3"] = round(sum(h["points_completed"] for h in history[:i+1]) / (i+1), 2)
         else:
             entry["moving_average_3"] = round(sum(h["points_completed"] for h in history[i-2:i+1]) / 3, 2)
     
-    # Save history
     history_path = Path("data/sprint_history.json")
     history_path.parent.mkdir(parents=True, exist_ok=True)
     with history_path.open("w", encoding="utf-8") as fh:
@@ -277,10 +274,6 @@ def main():
         fh.write("\n")
     
     print(f"\n✅ History saved to {history_path}")
-    print(f"\nSummary:")
-    print(f"- Sprints: {len(history)}")
-    print(f"- Date range: Sprint Ban 62 to Sprint Ban 79")
-    
     if history:
         velocities = [h['points_completed'] for h in history]
         print(f"- Min velocity: {min(velocities)} points")
