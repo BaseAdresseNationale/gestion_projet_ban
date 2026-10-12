@@ -5,6 +5,13 @@
     "source": "repo-labels",
     "points_completed": 28,
     "tickets_completed": 6,
-    "moving_average_3": 28.0
+    "moving_average_3": 14.0
+  },
+  {
+    "sprint": "Sprint Ban 80",
+    "date": "2026-10-12T09:13:39Z",
+    "points_completed": 0,
+    "tickets_completed": 0,
+    "moving_average_3": 14.0
   }
 ]
