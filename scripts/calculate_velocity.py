@@ -84,8 +84,8 @@ def fetch_sprint_iterations(org: str, project_number: int):
     return iterations
 
 
-def fetch_project_items_by_iteration(org: str, project_number: int, iteration_id: str):
-    """Fetch all project items filtered by Sprint Ban iteration"""
+def fetch_all_project_items(org: str, project_number: int):
+    """Fetch ALL project items (no filtering in query)"""
     query = """
     query($org: String!, $projectNumber: Int!) {
       organization(login: $org) {
@@ -125,9 +125,11 @@ def fetch_project_items_by_iteration(org: str, project_number: int, iteration_id
     }
     """
     data = gh_graphql(query, {"org": org, "projectNumber": project_number})
-    
-    # Filter items by iteration_id
-    items = data["organization"]["projectV2"]["items"]["nodes"]
+    return data["organization"]["projectV2"]["items"]["nodes"]
+
+
+def filter_items_by_iteration(items, iteration_id: str):
+    """Filter items by iteration ID in Python"""
     filtered = []
     for item in items:
         for field_value in item.get("fieldValues", {}).get("nodes", []):
@@ -262,11 +264,15 @@ def main():
 
     sprint_title = iteration["title"]
     iteration_id = iteration["id"]
-    print(f"Processing sprint: {sprint_title}")
+    print(f"Processing sprint: {sprint_title} (ID: {iteration_id})")
 
-    # Fetch items for this iteration
-    items = fetch_project_items_by_iteration(org, project_number, iteration_id)
-    print(f"Found {len(items)} items in this sprint")
+    # Fetch ALL items first
+    all_items = fetch_all_project_items(org, project_number)
+    print(f"Fetched {len(all_items)} total items from project")
+    
+    # Filter by iteration in Python
+    items = filter_items_by_iteration(all_items, iteration_id)
+    print(f"Found {len(items)} items in sprint {sprint_title}")
 
     velocity = 0
     closed_issues = []
@@ -291,7 +297,7 @@ def main():
             "points": points,
         })
 
-    print(f"Velocity: {velocity} points from {len(closed_issues)} closed tickets")
+    print(f"Velocity: {velocity} points from {len(closed_issues)} closed tickets with points")
 
     # Update history
     history = load_history(history_path)
