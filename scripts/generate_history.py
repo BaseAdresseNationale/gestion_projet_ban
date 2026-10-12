@@ -45,8 +45,40 @@ def gh_graphql(query: str, variables: dict):
         raise RuntimeError(f"GitHub API error: {exc.code} {body}") from exc
 
 
+def fetch_all_fields(org: str, project_number: int):
+    """Fetch all fields in the project to understand structure"""
+    query = """
+    query($org: String!, $projectNumber: Int!) {
+      organization(login: $org) {
+        projectV2(number: $projectNumber) {
+          fields(first: 30) {
+            nodes {
+              __typename
+              ... on ProjectV2IterationField {
+                id
+                name
+              }
+              ... on ProjectV2SingleSelectField {
+                id
+                name
+              }
+              ... on ProjectV2TextField {
+                id
+                name
+              }
+            }
+          }
+        }
+      }
+    }
+    """
+    data = gh_graphql(query, {"org": org, "projectNumber": project_number})
+    fields = data["organization"]["projectV2"]["fields"]["nodes"]
+    return fields
+
+
 def fetch_all_iterations(org: str, project_number: int):
-    """Fetch all Sprint Ban iterations"""
+    """Fetch all iterations from any IterationField"""
     query = """
     query($org: String!, $projectNumber: Int!) {
       organization(login: $org) {
@@ -72,16 +104,27 @@ def fetch_all_iterations(org: str, project_number: int):
     """
     data = gh_graphql(query, {"org": org, "projectNumber": project_number})
     project = data["organization"]["projectV2"]
-    iterations = []
+    
+    all_iterations = []
     for field in project["fields"]["nodes"]:
-        if field and field.get("name") == "Sprint Ban":
+        if field is None:
+            continue
+        
+        # Check if it's an IterationField
+        if field.get("configuration") and "iterations" in field.get("configuration", {}):
+            field_name = field.get("name", "Unknown")
+            print(f"\n📋 Found IterationField: '{field_name}'")
+            
             for iteration in field.get("configuration", {}).get("iterations", []):
-                iterations.append({
+                all_iterations.append({
                     "id": iteration["id"],
                     "title": iteration["title"],
                     "start_date": iteration.get("startDate"),
+                    "field_name": field_name,
                 })
-    return iterations
+                print(f"  - {iteration['title']!r}")
+    
+    return all_iterations
 
 
 def fetch_all_project_items(org: str, project_number: int):
@@ -173,8 +216,7 @@ def filter_items_by_iteration(items, iteration_id: str):
 
 def extract_sprint_number(title: str):
     """Extract the sprint number from a title like 'Sprint Ban 62', 'Sprint Ban 62 (2026)', etc."""
-    match = re.search(r"Sprint Ban\s*(\d+)", title, re.IGNORECASE)
-    print(repr(title))
+    match = re.search(r"(?:Sprint\s*Ban|Sprint\s*BAN|BAN\s*Sprint)\s*(\d+)", title, re.IGNORECASE)
     if not match:
         return None
     return int(match.group(1))
@@ -212,14 +254,19 @@ def main():
     org = "BaseAdresseNationale"
     project_number = 4
     
-    print("Fetching all iterations...")
+    print("=== Project v2 Structure Analysis ===\n")
+    print("Fetching all fields in project...")
+    fields = fetch_all_fields(org, project_number)
+    print(f"Found {len(fields)} fields:")
+    for field in fields:
+        if field:
+            print(f"  - {field.get('__typename', 'Unknown')}: '{field.get('name', 'Unknown')}'")
+    
+    print("\n=== Fetching all iterations ===\n")
     iterations = fetch_all_iterations(org, project_number)
-    print(f"Found {len(iterations)} total iterations")
+    print(f"\n✅ Found {len(iterations)} total iterations")
     
-    print("\nAll iteration titles found:")
-    for it in iterations:
-        print(f"  - {it['title']}")
-    
+    print("\nFiltering sprints 62-79...")
     sprint_numbers = []
     for it in iterations:
         title = it["title"]
@@ -227,21 +274,20 @@ def main():
         if sprint_num is not None:
             if 62 <= sprint_num <= 79:
                 sprint_numbers.append((sprint_num, it))
-                print(f"  ✓ {title} -> sprint {sprint_num} matches filter")
+                print(f"  ✓ {title!r} -> sprint {sprint_num} matches filter")
             else:
-                print(f"  - {title} -> sprint {sprint_num} outside filter")
+                print(f"  - {title!r} -> sprint {sprint_num} outside filter")
         else:
-            print(f"  ✗ {title} -> no sprint number matched")
+            print(f"  ✗ {title!r} -> no sprint number matched")
     
     if not sprint_numbers:
-        print("\n⚠️ No sprint found between Sprint Ban 62 and Sprint Ban 79")
-        print("Check the exact iteration titles displayed above.")
+        print("\n⚠️ No sprint found between 62 and 79")
+        print("Check the iteration titles above for the correct naming pattern.")
         return
     
     sprint_numbers.sort(key=lambda x: x[0])
-    filtered_iterations = [it for _, it in sprint_numbers]
+    print(f"\n✅ Processing {len(sprint_numbers)} sprints: {[s[0] for s in sprint_numbers]}")
     
-    print(f"\n✅ Processing {len(filtered_iterations)} sprints: {[s[0] for s in sprint_numbers]}")
     print(f"\nFetching all project items...")
     all_items = fetch_all_project_items(org, project_number)
     print(f"Fetched {len(all_items)} total items")
