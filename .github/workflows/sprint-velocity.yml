@@ -1,0 +1,63 @@
+name: Calculate Sprint Velocity
+
+on:
+  workflow_dispatch:
+    inputs:
+      sprint_name:
+        description: "Nom du sprint (ex. 'Sprint Ban 80' - vide pour le plus récent)"
+        required: false
+        type: string
+      create_issue:
+        description: "Créer une issue de rapport"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  issues: write
+  actions: read
+
+jobs:
+  velocity:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Calculate velocity
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ORG: BaseAdresseNationale
+          PROJECT_NUMBER: "4"
+          SPRINT_NAME: ${{ inputs.sprint_name }}
+          CREATE_ISSUE: ${{ inputs.create_issue }}
+          TARGET_REPO: gestion_projet_ban
+          HISTORY_PATH: data/sprint_history.json
+        run: python3 scripts/calculate_velocity.py
+
+      - name: Commit and push history update
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          if git diff --quiet; then
+            echo "No changes to commit"
+          else
+            git add data/sprint_history.json
+            git commit -m "Update sprint velocity history"
+            git push
+          fi
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sprint-velocity-${{ github.run_number }}
+          path: data/sprint_history.json
