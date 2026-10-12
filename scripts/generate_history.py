@@ -174,6 +174,7 @@ def filter_items_by_iteration(items, iteration_id: str):
 def extract_sprint_number(title: str):
     """Extract the sprint number from a title like 'Sprint Ban 62', 'Sprint Ban 62 (2026)', etc."""
     match = re.search(r"Sprint Ban\s*(\d+)", title, re.IGNORECASE)
+    print(repr(title))
     if not match:
         return None
     return int(match.group(1))
