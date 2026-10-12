@@ -170,7 +170,7 @@ def filter_items_by_iteration(items, iteration_id: str):
     return filtered
 
 
-def calculate_velocity_for_iteration(items, iteration_title: str):
+def calculate_velocity_for_iteration(items):
     """Calculate velocity for a specific iteration"""
     velocity = 0
     closed_issues = []
@@ -195,11 +195,7 @@ def calculate_velocity_for_iteration(items, iteration_title: str):
             "points": points,
         })
     
-    return {
-        "sprint": iteration_title,
-        "points_completed": velocity,
-        "tickets_completed": len(closed_issues),
-    }
+    return velocity, len(closed_issues)
 
 
 def main():
@@ -208,25 +204,42 @@ def main():
     
     print("Fetching all iterations...")
     iterations = fetch_all_iterations(org, project_number)
-    print(f"Found {len(iterations)} iterations")
+    print(f"Found {len(iterations)} total iterations")
+    
+    # Debug: print all iterations found
+    print("\nAll iterations found:")
+    for it in iterations:
+        print(f"  - {it['title']}")
     
     # Filter only Sprint Ban 62 to 79 (exclude 80)
     sprint_numbers = []
     for it in iterations:
         title = it["title"]
+        # Try to extract sprint number
+        # Format: "Sprint Ban X" or "Sprint Ban XX"
         if "Sprint Ban" in title:
             try:
-                num = int(title.replace("Sprint Ban", "").strip())
+                # Remove "Sprint Ban " prefix and convert to int
+                num_str = title.replace("Sprint Ban", "").strip()
+                num = int(num_str)
                 if 62 <= num <= 79:
                     sprint_numbers.append((num, it))
+                    print(f"  ✓ Sprint Ban {num} matches filter")
             except ValueError:
-                pass
+                print(f"  ✗ Could not parse number from '{title}'")
+    
+    if not sprint_numbers:
+        print("\n⚠️  No sprints found matching 'Sprint Ban 62' to 'Sprint Ban 79'")
+        print("This might be due to:")
+        print("  - Different naming format (check iteration names above)")
+        print("  - Sprints not created yet in the Project v2")
+        return
     
     # Sort by sprint number
     sprint_numbers.sort(key=lambda x: x[0])
     filtered_iterations = [it for _, it in sprint_numbers]
     
-    print(f"Processing sprints: {[s[0] for s in sprint_numbers]}")
+    print(f"\n✅ Processing {len(filtered_iterations)} sprints: {[s[0] for s in sprint_numbers]}")
     print(f"\nFetching all project items...")
     all_items = fetch_all_project_items(org, project_number)
     print(f"Fetched {len(all_items)} total items")
@@ -235,13 +248,19 @@ def main():
     for sprint_num, iteration in filtered_iterations:
         print(f"\nProcessing Sprint Ban {sprint_num}...")
         items = filter_items_by_iteration(all_items, iteration["id"])
-        print(f"  Found {len(items)} items")
+        print(f"  Found {len(items)} items in this sprint")
         
-        velocity_data = calculate_velocity_for_iteration(items, iteration["title"])
-        velocity_data["date"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        history.append(velocity_data)
+        velocity, tickets_count = calculate_velocity_for_iteration(items)
         
-        print(f"  Velocity: {velocity_data['points_completed']} points ({velocity_data['tickets_completed']} tickets)")
+        record = {
+            "sprint": iteration["title"],
+            "date": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "points_completed": velocity,
+            "tickets_completed": tickets_count,
+        }
+        history.append(record)
+        
+        print(f"  Velocity: {velocity} points ({tickets_count} tickets)")
     
     # Calculate moving average for all entries
     for i, entry in enumerate(history):
@@ -261,10 +280,13 @@ def main():
     print(f"\nSummary:")
     print(f"- Sprints: {len(history)}")
     print(f"- Date range: Sprint Ban 62 to Sprint Ban 79")
-    print(f"- Min velocity: {min(h['points_completed'] for h in history)} points")
-    print(f"- Max velocity: {max(h['points_completed'] for h in history)} points")
-    print(f"- Average velocity: {round(sum(h['points_completed'] for h in history) / len(history), 2)} points")
-    print(f"- Latest moving average (3): {history[-1]['moving_average_3']} points")
+    
+    if history:
+        velocities = [h['points_completed'] for h in history]
+        print(f"- Min velocity: {min(velocities)} points")
+        print(f"- Max velocity: {max(velocities)} points")
+        print(f"- Average velocity: {round(sum(velocities) / len(velocities), 2)} points")
+        print(f"- Latest moving average (3): {history[-1]['moving_average_3']} points")
 
 
 if __name__ == "__main__":
