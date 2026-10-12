@@ -45,46 +45,15 @@ def gh_graphql(query: str, variables: dict):
         raise RuntimeError(f"GitHub API error: {exc.code} {body}") from exc
 
 
-def fetch_all_fields(org: str, project_number: int):
-    """Fetch all fields in the project to understand structure"""
+def fetch_all_iterations_debug(org: str, project_number: int):
+    """Fetch all iterations and print debug info"""
     query = """
     query($org: String!, $projectNumber: Int!) {
       organization(login: $org) {
         projectV2(number: $projectNumber) {
-          fields(first: 30) {
+          fields(first: 50) {
             nodes {
               __typename
-              ... on ProjectV2IterationField {
-                id
-                name
-              }
-              ... on ProjectV2SingleSelectField {
-                id
-                name
-              }
-              ... on ProjectV2TextField {
-                id
-                name
-              }
-            }
-          }
-        }
-      }
-    }
-    """
-    data = gh_graphql(query, {"org": org, "projectNumber": project_number})
-    fields = data["organization"]["projectV2"]["fields"]["nodes"]
-    return fields
-
-
-def fetch_all_iterations(org: str, project_number: int):
-    """Fetch all iterations from any IterationField"""
-    query = """
-    query($org: String!, $projectNumber: Int!) {
-      organization(login: $org) {
-        projectV2(number: $projectNumber) {
-          fields(first: 30) {
-            nodes {
               ... on ProjectV2IterationField {
                 id
                 name
@@ -105,24 +74,30 @@ def fetch_all_iterations(org: str, project_number: int):
     data = gh_graphql(query, {"org": org, "projectNumber": project_number})
     project = data["organization"]["projectV2"]
     
+    print("=== ALL FIELDS IN PROJECT ===")
     all_iterations = []
-    for field in project["fields"]["nodes"]:
+    for idx, field in enumerate(project["fields"]["nodes"]):
         if field is None:
+            print(f"Field {idx}: None")
             continue
         
-        # Check if it's an IterationField
+        typename = field.get("__typename", "Unknown")
+        name = field.get("name", "Unknown")
+        print(f"\nField {idx}: {typename} - '{name}'")
+        
+        # If it has iterations, it's an IterationField
         if field.get("configuration") and "iterations" in field.get("configuration", {}):
-            field_name = field.get("name", "Unknown")
-            print(f"\n📋 Found IterationField: '{field_name}'")
-            
-            for iteration in field.get("configuration", {}).get("iterations", []):
+            iterations = field.get("configuration", {}).get("iterations", [])
+            print(f"  Found {len(iterations)} iterations:")
+            for it in iterations:
+                title = it.get("title", "Unknown")
+                print(f"    - {title!r}")
                 all_iterations.append({
-                    "id": iteration["id"],
-                    "title": iteration["title"],
-                    "start_date": iteration.get("startDate"),
-                    "field_name": field_name,
+                    "id": it["id"],
+                    "title": title,
+                    "start_date": it.get("startDate"),
+                    "field_name": name,
                 })
-                print(f"  - {iteration['title']!r}")
     
     return all_iterations
 
@@ -215,11 +190,21 @@ def filter_items_by_iteration(items, iteration_id: str):
 
 
 def extract_sprint_number(title: str):
-    """Extract the sprint number from a title like 'Sprint Ban 62', 'Sprint Ban 62 (2026)', etc."""
-    match = re.search(r"(?:Sprint\s*Ban|Sprint\s*BAN|BAN\s*Sprint)\s*(\d+)", title, re.IGNORECASE)
-    if not match:
-        return None
-    return int(match.group(1))
+    """Extract the sprint number from a title"""
+    # Try multiple patterns
+    patterns = [
+        r"Sprint Ban\s*(\d+)",
+        r"Sprint\s+Ban\s+(\d+)",
+        r"Ban\s*(\d+)",
+        r"(\d+)",  # Fallback: just a number
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, title, re.IGNORECASE)
+        if match:
+            return int(match.group(1))
+    
+    return None
 
 
 def calculate_velocity_for_iteration(items):
@@ -254,47 +239,50 @@ def main():
     org = "BaseAdresseNationale"
     project_number = 4
     
-    print("=== Project v2 Structure Analysis ===\n")
-    print("Fetching all fields in project...")
-    fields = fetch_all_fields(org, project_number)
-    print(f"Found {len(fields)} fields:")
-    for field in fields:
-        if field:
-            print(f"  - {field.get('__typename', 'Unknown')}: '{field.get('name', 'Unknown')}'")
+    print("Fetching all iterations with debug info...\n")
+    iterations = fetch_all_iterations_debug(org, project_number)
+    print(f"\n✅ Found {len(iterations)} total iterations\n")
     
-    print("\n=== Fetching all iterations ===\n")
-    iterations = fetch_all_iterations(org, project_number)
-    print(f"\n✅ Found {len(iterations)} total iterations")
+    if not iterations:
+        print("ERROR: No iterations found at all!")
+        return
     
-    print("\nFiltering sprints 62-79...")
+    print("=== FILTERING SPRINTS 62-79 ===\n")
     sprint_numbers = []
     for it in iterations:
         title = it["title"]
         sprint_num = extract_sprint_number(title)
+        
         if sprint_num is not None:
+            print(f"Title: {title!r} -> Extracted number: {sprint_num}")
             if 62 <= sprint_num <= 79:
                 sprint_numbers.append((sprint_num, it))
-                print(f"  ✓ {title!r} -> sprint {sprint_num} matches filter")
+                print(f"  ✓ MATCHES filter (62-79)")
             else:
-                print(f"  - {title!r} -> sprint {sprint_num} outside filter")
+                print(f"  ✗ Outside filter (number {sprint_num})")
         else:
-            print(f"  ✗ {title!r} -> no sprint number matched")
+            print(f"Title: {title!r} -> Could not extract number")
+    
+    print(f"\n📊 Total sprints matching 62-79: {len(sprint_numbers)}")
     
     if not sprint_numbers:
-        print("\n⚠️ No sprint found between 62 and 79")
-        print("Check the iteration titles above for the correct naming pattern.")
+        print("\n❌ No sprints found in range 62-79")
+        print("This might mean:")
+        print("  - Sprints use a different naming convention")
+        print("  - The project number is incorrect")
+        print("  - Check the iteration titles above")
         return
     
     sprint_numbers.sort(key=lambda x: x[0])
-    print(f"\n✅ Processing {len(sprint_numbers)} sprints: {[s[0] for s in sprint_numbers]}")
+    print(f"Processing sprints: {[s[0] for s in sprint_numbers]}\n")
     
-    print(f"\nFetching all project items...")
+    print("Fetching all project items...")
     all_items = fetch_all_project_items(org, project_number)
-    print(f"Fetched {len(all_items)} total items")
+    print(f"Fetched {len(all_items)} total items\n")
     
     history = []
     for sprint_num, iteration in sprint_numbers:
-        print(f"\nProcessing sprint {sprint_num} ({iteration['title']})...")
+        print(f"Processing sprint {sprint_num} ({iteration['title']})...")
         items = filter_items_by_iteration(all_items, iteration["id"])
         print(f"  Found {len(items)} items in this sprint")
         
@@ -306,27 +294,34 @@ def main():
             "tickets_completed": tickets_count,
         }
         history.append(record)
-        print(f"  Velocity: {velocity} points ({tickets_count} tickets)")
+        print(f"  Velocity: {velocity} points ({tickets_count} tickets)\n")
     
+    # Calculate moving average
     for i, entry in enumerate(history):
         if i < 2:
             entry["moving_average_3"] = round(sum(h["points_completed"] for h in history[:i+1]) / (i+1), 2)
         else:
             entry["moving_average_3"] = round(sum(h["points_completed"] for h in history[i-2:i+1]) / 3, 2)
     
+    # Save history
     history_path = Path("data/sprint_history.json")
     history_path.parent.mkdir(parents=True, exist_ok=True)
     with history_path.open("w", encoding="utf-8") as fh:
         json.dump(history, fh, indent=2, ensure_ascii=False)
         fh.write("\n")
     
-    print(f"\n✅ History saved to {history_path}")
+    print(f"✅ History saved to {history_path}")
+    
     if history:
         velocities = [h['points_completed'] for h in history]
-        print(f"- Min velocity: {min(velocities)} points")
-        print(f"- Max velocity: {max(velocities)} points")
-        print(f"- Average velocity: {round(sum(velocities) / len(velocities), 2)} points")
-        print(f"- Latest moving average (3): {history[-1]['moving_average_3']} points")
+        print(f"\n📈 Summary:")
+        print(f"  - Sprints processed: {len(history)}")
+        print(f"  - Min velocity: {min(velocities)} points")
+        print(f"  - Max velocity: {max(velocities)} points")
+        print(f"  - Average velocity: {round(sum(velocities) / len(velocities), 2)} points")
+        print(f"  - Latest moving average (3): {history[-1]['moving_average_3']} points")
+    else:
+        print("⚠️  No history generated")
 
 
 if __name__ == "__main__":
